@@ -121,21 +121,36 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;heigh
   transition:color .15s}
 .metrics-toggle:hover{color:var(--text)}
 .metrics-toggle span:first-child{color:var(--orange);font-size:9px}
-.metrics-body{padding:14px 16px;background:var(--s2);border-top:1px solid var(--border)}
-.metrics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-@media(max-width:650px){.metrics-grid{grid-template-columns:1fr 1fr}}
-.mg{border:1px solid var(--border)}
+.metrics-body{padding:12px 14px;background:var(--s2);border-top:1px solid var(--border);overflow:hidden}
+.metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;overflow:hidden}
+@media(max-width:700px){.metrics-grid{grid-template-columns:1fr 1fr}}
+.mg{border:1px solid var(--border);min-width:0;overflow:hidden}
 .mg-t{font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:700;
   padding:7px 10px;border-bottom:1px solid var(--border)}
 .mg-t.c{color:var(--amber);background:rgba(200,151,58,.06)}
 .mg-t.o{color:var(--cyan);background:rgba(74,172,187,.06)}
 .mg-t.s{color:var(--blue);background:rgba(76,126,201,.06)}
 .mg-t.d{color:var(--green);background:rgba(62,168,118,.06)}
-.mg-row{display:flex;align-items:center;justify-content:space-between;
-  padding:4px 10px;border-bottom:1px solid var(--border);font-family:'JetBrains Mono',monospace}
+.mg-row{display:flex;align-items:center;gap:5px;
+  padding:5px 8px;border-bottom:1px solid var(--border);
+  font-family:'JetBrains Mono',monospace;transition:background .12s;
+  user-select:none;min-width:0;overflow:hidden}
 .mg-row:last-child{border-bottom:none}
-.mg-name{font-size:9px;color:var(--muted)}
-.mg-w{font-size:10px;font-weight:600}
+.mg-row:hover{background:var(--s3)}
+.mg-row.disabled{opacity:.3}
+.mg-row.disabled .mg-name{text-decoration:line-through}
+.mg-check{font-size:9px;flex-shrink:0;color:var(--muted);cursor:pointer;width:10px;text-align:center}
+.mg-row:not(.disabled) .mg-check{color:var(--green)}
+.mg-name{font-size:9px;color:var(--muted);flex-shrink:0;width:62px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mg-slider{-webkit-appearance:none;flex:1;min-width:0;height:2px;
+  background:var(--border2);outline:none;cursor:pointer}
+.mg-slider.c::-webkit-slider-thumb{background:var(--amber)}
+.mg-slider.o::-webkit-slider-thumb{background:var(--cyan)}
+.mg-slider.s::-webkit-slider-thumb{background:var(--blue)}
+.mg-slider.d::-webkit-slider-thumb{background:var(--green)}
+.mg-slider::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:9px;border-radius:50%;cursor:pointer}
+.mg-w{font-size:9px;font-weight:600;flex-shrink:0;width:26px;text-align:right}
 .mg-w.c{color:var(--amber)}.mg-w.o{color:var(--cyan)}.mg-w.s{color:var(--blue)}.mg-w.d{color:var(--green)}
 .mg-w.hi{color:var(--orange)}
 
@@ -396,8 +411,9 @@ const PLAYERS = [
 // ──────────────────────────────────────────────────────────────
 //  SCORING ENGINE
 // ──────────────────────────────────────────────────────────────
-// Group weights (multiplied by individual metric base weight)
 let GW = {c:1.0, o:1.0, s:1.0, d:1.0};
+const disabledMetrics = new Set();
+const metricWeights = {}; // key → multiplier override (default = m.w)
 
 function norm(v, m){
   const clamped = Math.min(Math.max(v, m.lo), m.hi);
@@ -407,12 +423,40 @@ function norm(v, m){
 function score26(stats){
   let total = 0, wsum = 0;
   METRICS.forEach(m => {
-    const w = m.w * GW[m.grp];
+    if(disabledMetrics.has(m.key)) return;
+    const w = metricWeights[m.key] ?? m.w;
     const n = norm(stats[m.key] ?? 0, m);
     total += w * n;
     wsum += w;
   });
   return wsum > 0 ? total / wsum : 0;
+}
+
+function toggleMetric(key){
+  if(disabledMetrics.has(key)) disabledMetrics.delete(key);
+  else disabledMetrics.add(key);
+  const row = document.getElementById('mrow-'+key);
+  if(row) row.classList.toggle('disabled', disabledMetrics.has(key));
+  render();
+}
+
+function updMetricW(key, val){
+  metricWeights[key] = parseFloat(val);
+  const label = document.getElementById('mwv-'+key);
+  if(label) label.textContent = '×'+parseFloat(val).toFixed(1);
+
+  // recalculate group average and sync group slider
+  const m = METRICS.find(m => m.key === key);
+  if(m){
+    const grpMetrics = METRICS.filter(x => x.grp === m.grp);
+    const avg = grpMetrics.reduce((s,x) => s + (metricWeights[x.key] ?? x.w), 0) / grpMetrics.length;
+    GW[m.grp] = avg;
+    const gSlider = document.getElementById('gw_'+m.grp);
+    const gLabel  = document.getElementById('gv_'+m.grp);
+    if(gSlider) gSlider.value = Math.round(avg * 100);
+    if(gLabel)  gLabel.textContent = '×'+avg.toFixed(1);
+  }
+  render();
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -434,6 +478,16 @@ function mkSliders(){
 function updGW(g, v){
   GW[g] = parseInt(v)/100;
   document.getElementById('gv_'+g).textContent = '×'+GW[g].toFixed(1);
+  // propagate to all individual metric sliders in this group
+  METRICS.forEach(m => {
+    if(m.grp !== g) return;
+    metricWeights[m.key] = GW[g];
+    // update slider and label if panel is open
+    const slider = document.querySelector(`#mrow-${m.key} .mg-slider`);
+    const label  = document.getElementById('mwv-'+m.key);
+    if(slider) slider.value = Math.round(GW[g] * 10);
+    if(label)  label.textContent = '×'+GW[g].toFixed(1);
+  });
   render();
 }
 
@@ -456,24 +510,29 @@ function toggleMetrics(){
   const open = body.style.display === 'none';
   body.style.display = open ? 'block' : 'none';
   icon.textContent = open ? '▼' : '▶';
-  if(open && !document.getElementById('metrics-grid').innerHTML){
-    buildMetricsPanel();
-  }
+  if(open) buildMetricsPanel(); // always rebuild to reflect current disabled state
 }
 
 function buildMetricsPanel(){
-  const GC = {c:'var(--amber)',o:'var(--cyan)',s:'var(--blue)',d:'var(--green)'};
   const GL = {c:'COMPOSITE',o:'OFFENSIVE',s:'SHOOTING',d:'DEFENSIVE'};
   const groups = {c:[],o:[],s:[],d:[]};
   METRICS.forEach(m => groups[m.grp].push(m));
   const html = Object.keys(groups).map(g => `
     <div class="mg">
       <div class="mg-t ${g}">${GL[g]} (${groups[g].length})</div>
-      ${groups[g].map(m=>`
-        <div class="mg-row">
-          <span class="mg-name">${m.lbl}</span>
-          <span class="mg-w ${g}${m.w>=2?' hi':''}" title="weight">×${m.w.toFixed(1)}</span>
-        </div>`).join('')}
+      ${groups[g].map(m => {
+        const curW = metricWeights[m.key] ?? m.w;
+        const sliderVal = Math.round(curW * 10); // 0–30 maps to ×0.0–×3.0
+        const dis = disabledMetrics.has(m.key);
+        return `<div class="mg-row${dis?' disabled':''}" id="mrow-${m.key}">
+          <span class="mg-check" onclick="toggleMetric('${m.key}')" title="Toggle">${dis?'○':'●'}</span>
+          <span class="mg-name" onclick="toggleMetric('${m.key}')">${m.lbl}</span>
+          <input type="range" class="mg-slider ${g}" min="0" max="30" step="1"
+            value="${sliderVal}" oninput="updMetricW('${m.key}',this.value/10)"
+            onclick="event.stopPropagation()" title="×${curW.toFixed(1)}">
+          <span class="mg-w ${g}${curW>=2?' hi':''}" id="mwv-${m.key}">×${curW.toFixed(1)}</span>
+        </div>`;
+      }).join('')}
     </div>`).join('');
   document.getElementById('metrics-grid').innerHTML = html;
 }
